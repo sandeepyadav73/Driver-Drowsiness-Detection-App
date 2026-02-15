@@ -1,9 +1,8 @@
-from flask import Flask, render_template, Response
+from flask import Flask, render_template, Response, jsonify
 import cv2
 import mediapipe as mp
 import numpy as np
 from scipy.spatial import distance as dist
-import winsound
 import os
 
 # ===============================
@@ -11,7 +10,6 @@ import os
 # ===============================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
-ALARM_PATH = os.path.join(BASE_DIR, "assets", "alarm.wav")
 
 app = Flask(__name__, template_folder=TEMPLATE_DIR)
 
@@ -42,12 +40,6 @@ ALARM_ON = False
 # ===============================
 # HELPERS
 # ===============================
-def sound_alarm():
-    winsound.PlaySound(
-        ALARM_PATH,
-        winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_LOOP
-    )
-
 def euclidean(p1, p2):
     return dist.euclidean(p1, p2)
 
@@ -68,7 +60,7 @@ def mouth_ratio(top, bottom, left, right):
 def generate_frames():
     global COUNTER, YAWN_COUNTER, ALARM_ON
 
-    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    cap = cv2.VideoCapture(0)
 
     while True:
         success, frame = cap.read()
@@ -90,63 +82,46 @@ def generate_frames():
                         int(face.landmark[i].y * h)
                     )
 
-                # Eye landmarks
-                left_eye = [lm(i) for i in [33, 160, 158, 133, 153, 144]]
-                right_eye = [lm(i) for i in [362, 385, 387, 263, 373, 380]]
+                left_eye = [lm(i) for i in [33,160,158,133,153,144]]
+                right_eye = [lm(i) for i in [362,385,387,263,373,380]]
 
-                ear = (eye_aspect_ratio(left_eye) + eye_aspect_ratio(right_eye)) / 2
+                ear = (eye_aspect_ratio(left_eye)+eye_aspect_ratio(right_eye))/2
 
-                # Mouth landmarks
                 top = lm(13)
                 bottom = lm(14)
                 left = lm(78)
                 right = lm(308)
-                mar = mouth_ratio(top, bottom, left, right)
+                mar = mouth_ratio(top,bottom,left,right)
 
-                # Draw landmarks
-                for p in left_eye + right_eye:
-                    cv2.circle(frame, p, 2, (0, 255, 0), -1)
-                cv2.circle(frame, top, 2, (255, 0, 0), -1)
-                cv2.circle(frame, bottom, 2, (255, 0, 0), -1)
-
-                # ===============================
-                # DROWSINESS LOGIC
-                # ===============================
                 if ear < EYE_AR_THRESH:
                     COUNTER += 1
                     if COUNTER >= EYE_AR_FRAMES:
-                        if not ALARM_ON:
-                            ALARM_ON = True
-                            sound_alarm()
-                        cv2.putText(frame, "DROWSINESS ALERT!", (10, 30),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        ALARM_ON = True
+                        cv2.putText(frame,"DROWSINESS ALERT",(10,30),
+                                    cv2.FONT_HERSHEY_SIMPLEX,0.7,(0,0,255),2)
                 else:
                     COUNTER = 0
-                    if ALARM_ON:
-                        ALARM_ON = False
-                        winsound.PlaySound(None, winsound.SND_PURGE)
+                    ALARM_ON = False
 
-                # ===============================
-                # YAWN LOGIC
-                # ===============================
                 if mar > YAWN_THRESH:
                     YAWN_COUNTER += 1
                     if YAWN_COUNTER >= YAWN_FRAMES:
-                        cv2.putText(frame, "YAWN DETECTED", (10, 60),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+                        cv2.putText(frame,"YAWN DETECTED",(10,60),
+                                    cv2.FONT_HERSHEY_SIMPLEX,0.7,(0,165,255),2)
                 else:
                     YAWN_COUNTER = 0
 
-                cv2.putText(frame, f"EAR: {ear:.2f}", (480, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
-                cv2.putText(frame, f"MAR: {mar:.2f}", (480, 60),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                cv2.putText(frame,f"EAR: {ear:.2f}",(480,30),
+                            cv2.FONT_HERSHEY_SIMPLEX,0.6,(255,0,0),2)
+
+                cv2.putText(frame,f"MAR: {mar:.2f}",(480,60),
+                            cv2.FONT_HERSHEY_SIMPLEX,0.6,(0,165,255),2)
 
         ret, buffer = cv2.imencode(".jpg", frame)
         frame = buffer.tobytes()
 
         yield (b"--frame\r\n"
-               b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n")
+               b"Content-Type: image/jpeg\r\n\r\n"+frame+b"\r\n")
 
 # ===============================
 # ROUTES
@@ -158,11 +133,15 @@ def index():
 @app.route("/video_feed")
 def video_feed():
     return Response(generate_frames(),
-                    mimetype="multipart/x-mixed-replace; boundary=frame")
+        mimetype="multipart/x-mixed-replace; boundary=frame")
+
+@app.route("/alarm_status")
+def alarm_status():
+    return jsonify({"alarm": ALARM_ON})
 
 # ===============================
 # RUN
 # ===============================
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT",5000))
     app.run(host="0.0.0.0", port=port)
